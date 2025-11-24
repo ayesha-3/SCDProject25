@@ -16,7 +16,8 @@ function menu() {
 4. Delete Record
 5. Search Records
 6. Sort Records
-7. Exit
+7. Export Data
+8. Exit
 =====================
   `);
 
@@ -118,8 +119,32 @@ function menu() {
             });
           });
           break;
-
       case '7':
+          const fs = require('fs');
+          
+          const recordsToExport = db.listRecords();
+          const fileName = 'export.txt';
+          const now = new Date();
+
+          let header = `Vault Export File\n`;
+          header += `Generated On: ${now.toISOString()}\n`;
+          header += `Total Records: ${recordsToExport.length}\n`;
+          header += `File Name: ${fileName}\n`;
+          header += `------------------------------\n\n`;
+
+          let body = '';
+
+          recordsToExport.forEach((r, i) => {
+            body += `${i + 1}. ID: ${r.id} | Name: ${r.name} | Value: ${r.value} | Created: ${r.created}\n`;
+          });
+
+          fs.writeFileSync(fileName, header + body);
+
+          console.log(`Data exported successfully to ${fileName}.`);
+          menu();
+          break;
+
+      case '8':
         console.log('👋 Exiting NodeVault...');
         rl.close();
         break;
