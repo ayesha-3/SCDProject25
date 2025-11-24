@@ -8,7 +8,7 @@ function addRecord({ name, value }) {
   const newRecord = { id: recordUtils.generateId(), name, value };
   data.push(newRecord);
   fileDB.writeDB(data);
-  vaultEvents.emit('recordAdded', newRecord);
+  vaultEvents.emit('record Added', newRecord);
   return newRecord;
 }
 
@@ -37,4 +37,13 @@ function deleteRecord(id) {
   return record;
 }
 
-module.exports = { addRecord, listRecords, updateRecord, deleteRecord };
+//search feature
+function searchRecords(keyword) {
+  const db = fileDB.readDB();
+  keyword = keyword.toLowerCase();
+
+  return db.filter(
+    r => r.name.toLowerCase().includes(keyword) || r.id.toString() === keyword
+  );
+}
+module.exports = { addRecord, listRecords, updateRecord, deleteRecord, searchRecords };
