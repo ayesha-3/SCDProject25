@@ -46,4 +46,28 @@ function searchRecords(keyword) {
     r => r.name.toLowerCase().includes(keyword) || r.id.toString() === keyword
   );
 }
-module.exports = { addRecord, listRecords, updateRecord, deleteRecord, searchRecords };
+function sortRecords(field, order) {
+  const db = fileDB.readDB();
+  const sorted = [...db]; // clone array so vault is not modified
+
+  sorted.sort((a, b) => {
+    let f1 = a[field];
+    let f2 = b[field];
+
+    // Convert dates to timestamps when sorting by created date
+    if (field === 'created') {
+      f1 = new Date(a.created).getTime();
+      f2 = new Date(b.created).getTime();
+    }
+
+    if (typeof f1 === 'string') f1 = f1.toLowerCase();
+    if (typeof f2 === 'string') f2 = f2.toLowerCase();
+
+    if (order === 'asc') return f1 > f2 ? 1 : -1;
+    else return f1 < f2 ? 1 : -1;
+  });
+
+  return sorted;
+}
+
+module.exports = { addRecord, listRecords, updateRecord, deleteRecord, searchRecords, sortRecords };
