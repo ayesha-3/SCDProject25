@@ -28,7 +28,7 @@ function createBackup() {
 function addRecord({ name, value }) {
   recordUtils.validateRecord({ name, value });
   const data = fileDB.readDB();
-  const newRecord = { id: recordUtils.generateId(), name, value };
+  const newRecord = { id: recordUtils.generateId(), name, value, createdAt: new Date().toISOString() };
   data.push(newRecord);
   fileDB.writeDB(data);
   createBackup(); 
@@ -94,5 +94,56 @@ function sortRecords(field, order) {
 
   return sorted;
 }
+function getVaultStatistics() {
+    const records = fileDB.readDB(); // load data from vault JSON
 
-module.exports = { addRecord, listRecords, updateRecord, deleteRecord, searchRecords, sortRecords, createBackup  };
+    if (!records || records.length === 0) {
+        return "No records found in vault.";
+    }
+
+    const totalRecords = records.length;
+
+    // Last modified date of vault.json
+    const vaultPath = path.join(__dirname, '..', 'data', 'vault.json');
+    const stats = fs.statSync(vaultPath);
+    const lastModified = stats.mtime.toISOString().replace('T', ' ').split('.')[0];
+
+    // Longest name
+    let longest = records.reduce((a, b) =>
+        a.name.length > b.name.length ? a : b
+    );
+
+    // Filter dates that are valid
+    const validDates = records
+        .map(r => new Date(r.createdAt))
+        .filter(d => !isNaN(d.getTime()));   // only valid dates
+
+    // If no valid dates exist (bad data)
+    if (validDates.length === 0) {
+        return `
+Vault Statistics:
+-----------------------------
+Total Records: ${totalRecords}
+Last Modified: ${lastModified}
+Longest Name: ${longest.name} (${longest.name.length} characters)
+Earliest Record: N/A
+Latest Record: N/A
+`;
+    }
+
+    const earliest = new Date(Math.min(...validDates)).toISOString().split('T')[0];
+    const latest = new Date(Math.max(...validDates)).toISOString().split('T')[0];
+
+    return `
+Vault Statistics:
+-----------------------------
+Total Records: ${totalRecords}
+Last Modified: ${lastModified}
+Longest Name: ${longest.name} (${longest.name.length} characters)
+Earliest Record: ${earliest}
+Latest Record: ${latest}
+`;
+}
+
+
+module.exports = { addRecord, listRecords, updateRecord, deleteRecord, searchRecords, sortRecords, createBackup , getVaultStatistics };
