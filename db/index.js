@@ -1,149 +1,223 @@
-const fs = require('fs');
-const path = require('path');
+require("dotenv").config();
+const { MongoClient, ObjectId } = require("mongodb");
+const path = require("path");
+const fs = require("fs");
 
-const fileDB = require('./file');
-const recordUtils = require('./record');
-const vaultEvents = require('../events');
+const recordUtils = require("./record");
+const vaultEvents = require("../events");
 
-const backupsDir = path.join(__dirname, '..', 'backups');
-// Ensure backups folder exists
-if (!fs.existsSync(backupsDir)) {
-  fs.mkdirSync(backupsDir);
+// -----------------------------
+// 🔗 1. CONNECT TO MONGODB
+// -----------------------------
+//const uri = "mongodb+srv://i233030_db_user:uiUQEj8Yw1dfu3Um@cluster0.td6wdcj.mongodb.net/vaultDB?appName=Cluster0";
+const uri = process.env.MONGO_URI;
+
+const client = new MongoClient(uri);
+let collection;
+
+async function initDB() {
+  await client.connect();
+  const db = client.db("vaultDB");
+  collection = db.collection("records");
+  console.log("✅ MongoDB Connected Successfully");
 }
 
-function createBackup() {
-  const data = fileDB.readDB();
+initDB().catch(console.error);
+
+// -----------------------------
+// 📦 BACKUP SYSTEM (unchanged)
+// -----------------------------
+const backupsDir = path.join(__dirname, "..", "backups");
+if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir);
+
+async function createBackup() {
+  const allRecords = await collection.find({}).toArray();
   const timestamp = new Date()
     .toISOString()
-    .replace(/:/g, '-')
-    .replace(/\..+/, '');
+    .replace(/:/g, "-")
+    .replace(/\..+/, "");
+  const backupName = `backup_${timestamp}.json`;
+  const backupPath = path.join(backupsDir, backupName);
 
-  const fileName = `backup_${timestamp}.json`;
-  const filePath = path.join(backupsDir, fileName);
-
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-
-  console.log(`📦 Backup created successfully: ${fileName}`);
+  fs.writeFileSync(backupPath, JSON.stringify(allRecords, null, 2));
+  console.log(`📦 Backup created successfully: ${backupName}`);
 }
-function addRecord({ name, value }) {
+
+// -----------------------------
+// 🟢 ADD RECORD
+// -----------------------------
+async function addRecord({ name, value }) {
   recordUtils.validateRecord({ name, value });
-  const data = fileDB.readDB();
-  const newRecord = { id: recordUtils.generateId(), name, value, createdAt: new Date().toISOString() };
-  data.push(newRecord);
-  fileDB.writeDB(data);
-  createBackup(); 
-  vaultEvents.emit('record Added', newRecord);
+
+  const newRecord = {
+    name,
+    value,
+    createdAt: new Date().toISOString(),
+  };
+
+  const result = await collection.insertOne(newRecord);
+  newRecord.id = result.insertedId.toString();
+
+  await createBackup();
+  vaultEvents.emit("recordAdded", newRecord);
+
   return newRecord;
 }
 
-function listRecords() {
-  return fileDB.readDB();
+// -----------------------------
+// 📜 LIST ALL RECORDS
+// -----------------------------
+async function listRecords() {
+  const data = await collection.find({}).toArray();
+
+  return data.map((r) => ({
+    id: r._id.toString(),
+    name: r.name,
+    value: r.value,
+    createdAt: r.createdAt,
+  }));
 }
 
-function updateRecord(id, newName, newValue) {
-  const data = fileDB.readDB();
-  const record = data.find(r => r.id === id);
-  if (!record) return null;
-  record.name = newName;
-  record.value = newValue;
-  fileDB.writeDB(data);
-  vaultEvents.emit('recordUpdated', record);
-  return record;
-}
-
-function deleteRecord(id) {
-  let data = fileDB.readDB();
-  const record = data.find(r => r.id === id);
-  if (!record) return null;
-  data = data.filter(r => r.id !== id);
-  fileDB.writeDB(data);
-  createBackup(); 
-  vaultEvents.emit('recordDeleted', record);
-  return record;
-}
-
-//search feature
-function searchRecords(keyword) {
-  const db = fileDB.readDB();
-  keyword = keyword.toLowerCase();
-
-  return db.filter(
-    r => r.name.toLowerCase().includes(keyword) || r.id.toString() === keyword
+// -----------------------------
+// ✏️ UPDATE RECORD
+// -----------------------------
+async function updateRecord(id, newName, newValue) {
+  const result = await collection.findOneAndUpdate(
+    { _id: new ObjectId(id) },
+    { $set: { name: newName, value: newValue } },
+    { returnDocument: "after" }
   );
+
+  if (!result.value) return null;
+
+  vaultEvents.emit("recordUpdated", result.value);
+
+  return {
+    id: result.value._id.toString(),
+    name: result.value.name,
+    value: result.value.value,
+    createdAt: result.value.createdAt,
+  };
 }
-function sortRecords(field, order) {
-  const db = fileDB.readDB();
-  const sorted = [...db]; // clone array so vault is not modified
 
-  sorted.sort((a, b) => {
-    let f1 = a[field];
-    let f2 = b[field];
+// -----------------------------
+// ❌ DELETE RECORD
+// -----------------------------
+async function deleteRecord(id) {
+  const record = await collection.findOne({ _id: new ObjectId(id) });
+  if (!record) return null;
 
-    // Convert dates to timestamps when sorting by created date
-    if (field === 'created') {
-      f1 = new Date(a.created).getTime();
-      f2 = new Date(b.created).getTime();
+  await collection.deleteOne({ _id: new ObjectId(id) });
+
+  await createBackup();
+  vaultEvents.emit("recordDeleted", record);
+
+  return {
+    id: record._id.toString(),
+    name: record.name,
+    value: record.value,
+    createdAt: record.createdAt,
+  };
+}
+
+// -----------------------------
+// 🔍 SEARCH
+// -----------------------------
+async function searchRecords(keyword) {
+  const regex = new RegExp(keyword, "i");
+
+  const results = await collection
+    .find({
+      $or: [{ name: regex }, { value: regex }],
+    })
+    .toArray();
+
+  return results.map((r) => ({
+    id: r._id.toString(),
+    name: r.name,
+    value: r.value,
+    createdAt: r.createdAt,
+  }));
+}
+
+// -----------------------------
+// ↕️ SORT (in-memory sort only)
+// -----------------------------
+async function sortRecords(field, order) {
+  const records = await listRecords();
+
+  return records.sort((a, b) => {
+    let x = a[field];
+    let y = b[field];
+
+    if (field === "createdAt") {
+      x = new Date(x).getTime();
+      y = new Date(y).getTime();
     }
 
-    if (typeof f1 === 'string') f1 = f1.toLowerCase();
-    if (typeof f2 === 'string') f2 = f2.toLowerCase();
+    if (typeof x === "string") x = x.toLowerCase();
+    if (typeof y === "string") y = y.toLowerCase();
 
-    if (order === 'asc') return f1 > f2 ? 1 : -1;
-    else return f1 < f2 ? 1 : -1;
+    if (order === "asc") return x > y ? 1 : -1;
+    else return x < y ? 1 : -1;
   });
-
-  return sorted;
 }
-function getVaultStatistics() {
-    const records = fileDB.readDB(); // load data from vault JSON
 
-    if (!records || records.length === 0) {
-        return "No records found in vault.";
-    }
+// -----------------------------
+// 📊 VAULT STATISTICS
+// -----------------------------
+async function getVaultStatistics() {
+  const records = await listRecords();
+  if (records.length === 0) {
+    return "No records found in vault.";
+  }
 
-    const totalRecords = records.length;
+  const totalRecords = records.length;
 
-    // Last modified date of vault.json
-    const vaultPath = path.join(__dirname, '..', 'data', 'vault.json');
-    const stats = fs.statSync(vaultPath);
-    const lastModified = stats.mtime.toISOString().replace('T', ' ').split('.')[0];
+  // Longest name
+  let longest = records.reduce((a, b) =>
+    a.name.length > b.name.length ? a : b
+  );
 
-    // Longest name
-    let longest = records.reduce((a, b) =>
-        a.name.length > b.name.length ? a : b
-    );
+  // Valid creation dates
+  const validDates = records
+    .map((r) => new Date(r.createdAt))
+    .filter((d) => !isNaN(d.getTime()));
 
-    // Filter dates that are valid
-    const validDates = records
-        .map(r => new Date(r.createdAt))
-        .filter(d => !isNaN(d.getTime()));   // only valid dates
+  let earliest = "N/A";
+  let latest = "N/A";
 
-    // If no valid dates exist (bad data)
-    if (validDates.length === 0) {
-        return `
+  if (validDates.length > 0) {
+    earliest = new Date(Math.min(...validDates))
+      .toISOString()
+      .split("T")[0];
+    latest = new Date(Math.max(...validDates))
+      .toISOString()
+      .split("T")[0];
+  }
+
+  return `
 Vault Statistics:
 -----------------------------
 Total Records: ${totalRecords}
-Last Modified: ${lastModified}
-Longest Name: ${longest.name} (${longest.name.length} characters)
-Earliest Record: N/A
-Latest Record: N/A
-`;
-    }
-
-    const earliest = new Date(Math.min(...validDates)).toISOString().split('T')[0];
-    const latest = new Date(Math.max(...validDates)).toISOString().split('T')[0];
-
-    return `
-Vault Statistics:
------------------------------
-Total Records: ${totalRecords}
-Last Modified: ${lastModified}
 Longest Name: ${longest.name} (${longest.name.length} characters)
 Earliest Record: ${earliest}
 Latest Record: ${latest}
 `;
 }
+async function closeDB() {
+  if (client) await client.close();
+  console.log("MongoDB connection closed.");
+}
+module.exports = {
+  addRecord,
+  listRecords,
+  updateRecord,
+  deleteRecord,
+  searchRecords,
+  sortRecords,
+  getVaultStatistics,
+  createBackup,
+  closeDB,
+};
 
-
-module.exports = { addRecord, listRecords, updateRecord, deleteRecord, searchRecords, sortRecords, createBackup , getVaultStatistics };
